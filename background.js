@@ -119,13 +119,26 @@ async function handlePDF(url) {
   });
 
   if (response.success) {
-    await writeToClipboardViaOffscreen(response.text);
-    showNotification(
-      "✅ Copied!",
-      `Extracted ${response.pageCount} page(s), ${response.text.length} characters copied.`
-    );
+    // Check if PDF.js found any actual text
+    const hasText = response.text && 
+      !response.text.includes("[No selectable text on this page") &&
+      response.text.length > 50; // Crude check for real content
+
+    if (hasText) {
+      await writeToClipboardViaOffscreen(response.text);
+      showNotification(
+        "✅ Copied!",
+        `Extracted ${response.pageCount} page(s), ${response.text.length} characters copied.`
+      );
+    } else {
+      // PDF.js found no text — fallback to Chrome's built-in viewer
+      console.log("[PDF Copier] PDF.js found no text. Falling back to Chrome viewer...");
+      await handlePDFViaChromeViewer(url);
+    }
   } else {
-    throw new Error(response.error || "PDF parsing failed.");
+    // PDF.js failed entirely — fallback to Chrome viewer
+    console.log("[PDF Copier] PDF.js failed. Falling back to Chrome viewer...");
+    await handlePDFViaChromeViewer(url);
   }
 }
 
@@ -327,6 +340,132 @@ function showNotification(title, message) {
     title: `PDF Copier: ${title}`,
     message: message,
   });
+}
+
+// ─── Fallback: Extract text via Chrome's built-in PDF viewer ─────────────────
+
+/**
+ * When PDF.js fails to extract text (due to encoding issues),
+ * we open the PDF in a hidden tab and extract using Chrome's viewer.
+ * Chrome's built-in viewer can render text that PDF.js can't decode.
+ */
+async function handlePDFViaChromeViewer(url) {
+  let tabId = null;
+
+  try {
+    showNotification("Fallback Mode", "Trying Chrome's built-in PDF viewer...");
+
+
+    // Open PDF in background tab (using Chrome's internal PDF viewer)
+    const newTab = await chrome.tabs.create({
+      url: url,
+      active: false,
+    });
+    tabId = newTab.id;
+
+    console.log("[PDF Copier] Opened PDF in background tab:", tabId);
+
+    // Wait for Chrome's PDF viewer to load
+    await waitForTabLoad(tabId);
+
+    // Small delay to let Chrome's viewer fully initialize
+    await new Promise(r => setTimeout(r, 2000));
+
+    // Inject script to extract text from Chrome's PDF viewer
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: extractTextFromChromePDFViewer,
+    });
+
+    const extractedText = results?.[0]?.result;
+
+
+    if (!extractedText || extractedText.trim().length < 20) {
+      throw new Error("No readable text found in Chrome's PDF viewer.");
+    }
+
+    await writeToClipboardViaOffscreen(extractedText);
+    showNotification(
+      "✅ Copied via Chrome Viewer!",
+      `${extractedText.length} characters extracted.`
+    );
+  } finally {
+    if (tabId !== null) {
+      try {
+        await chrome.tabs.remove(tabId);
+        console.log("[PDF Copier] Closed background tab:", tabId);
+      } catch (e) {
+        // Tab may have already been closed
+      }
+    }
+  }
+}
+
+/**
+ * This function runs INSIDE Chrome's PDF viewer tab.
+ * Chrome's PDF viewer uses a <pdf-viewer> element with layered text.
+ */
+function extractTextFromChromePDFViewer() {
+  // Chrome's internal PDF viewer has a <pdf-viewer> element
+  // with a shadow DOM containing the text layer
+  const pdfViewer = document.querySelector('pdf-viewer');
+  
+  if (pdfViewer) {
+    // Try to get text from the internal text layer
+    const textLayer = pdfViewer.shadowRoot?.querySelector('.textLayer');
+    if (textLayer) {
+      const text = textLayer.textContent?.trim();
+      if (text && text.length > 0) {
+        return text;
+      }
+    }
+    
+    // Alternative: try to get text from annotation layer
+    const annotationLayer = pdfViewer.shadowRoot?.querySelector('.annotationLayer');
+    if (annotationLayer) {
+      const annotations = annotationLayer.querySelectorAll('span');
+      const texts = Array.from(annotations).map(s => s.textContent?.trim()).filter(t => t);
+      if (texts.length > 0) {
+        return texts.join('\n');
+      }
+    }
+  }
+
+  // Fallback: try selecting text the old-fashioned way
+  const sel = window.getSelection();
+  const ranges = [];
+  
+  // Try to select all selectable text on page
+  const walker = document.createTreeWalker(
+    document.body,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        const tag = parent.tagName?.toLowerCase() || '';
+        if (['script', 'style', 'noscript'].includes(tag)) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        const style = window.getComputedStyle(parent);
+        if (style.display === 'none' || style.visibility === 'hidden') {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    }
+  );
+
+  const lines = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    const text = node.textContent?.trim();
+    if (text && text.length > 0) {
+      lines.push(text);
+    }
+  }
+
+  return lines.join('\n');
 }
 
 // ─── Message Listener (from content scripts, if needed) ───────────────────────
