@@ -342,12 +342,12 @@ function showNotification(title, message) {
   });
 }
 
-// ─── Fallback: Extract text via Chrome's built-in PDF viewer ─────────────────
+// ─── Fallback: Extract & copy text via Chrome's built-in PDF viewer ───────────
 
 /**
- * When PDF.js fails to extract text (due to encoding issues),
- * we open the PDF in a hidden tab and extract using Chrome's viewer.
- * Chrome's built-in viewer can render text that PDF.js can't decode.
+ * When PDF.js fails to extract text, we open the PDF in a hidden tab
+ * and use document.execCommand to select + copy all text.
+ * This works because Chrome's PDF viewer renders selectable text.
  */
 async function handlePDFViaChromeViewer(url) {
   let tabId = null;
@@ -355,8 +355,7 @@ async function handlePDFViaChromeViewer(url) {
   try {
     showNotification("Fallback Mode", "Trying Chrome's built-in PDF viewer...");
 
-
-    // Open PDF in background tab (using Chrome's internal PDF viewer)
+    // Open PDF in background tab (Chrome's internal viewer)
     const newTab = await chrome.tabs.create({
       url: url,
       active: false,
@@ -365,30 +364,33 @@ async function handlePDFViaChromeViewer(url) {
 
     console.log("[PDF Copier] Opened PDF in background tab:", tabId);
 
-    // Wait for Chrome's PDF viewer to load
+    // Wait for page to load
     await waitForTabLoad(tabId);
 
-    // Small delay to let Chrome's viewer fully initialize
-    await new Promise(r => setTimeout(r, 2000));
+    // Wait for Chrome's PDF viewer to fully initialize
+    await new Promise(r => setTimeout(r, 3000));
 
-    // Inject script to extract text from Chrome's PDF viewer
+    // Inject script to select all text AND copy it directly in this tab
     const results = await chrome.scripting.executeScript({
       target: { tabId: tabId },
-      func: extractTextFromChromePDFViewer,
+      func: selectAllAndCopyInPDFViewer,
     });
 
-    const extractedText = results?.[0]?.result;
 
-
-    if (!extractedText || extractedText.trim().length < 20) {
-      throw new Error("No readable text found in Chrome's PDF viewer.");
+    // Check result
+    if (results && results[0] && results[0].result && results[0].result.success) {
+      showNotification(
+        "✅ Copied via Chrome Viewer!",
+        `${results[0].result.charCount} characters copied.`
+      );
+    } else {
+      // Try alternative: open in ACTIVE tab temporarily
+      console.log("[PDF Copier] Background tab copy failed, trying active tab...");
+      await handlePDFViaActiveTab(url, tabId);
     }
-
-    await writeToClipboardViaOffscreen(extractedText);
-    showNotification(
-      "✅ Copied via Chrome Viewer!",
-      `${extractedText.length} characters extracted.`
-    );
+  } catch (err) {
+    console.error("[PDF Copier] Chrome viewer fallback error:", err);
+    throw new Error("Could not extract text from Chrome's PDF viewer.");
   } finally {
     if (tabId !== null) {
       try {
@@ -402,40 +404,42 @@ async function handlePDFViaChromeViewer(url) {
 }
 
 /**
- * This function runs INSIDE Chrome's PDF viewer tab.
- * Chrome's PDF viewer uses a <pdf-viewer> element with layered text.
+ * Try to select all text in Chrome's PDF viewer and copy it.
  */
-function extractTextFromChromePDFViewer() {
-  // Chrome's internal PDF viewer has a <pdf-viewer> element
-  // with a shadow DOM containing the text layer
-  const pdfViewer = document.querySelector('pdf-viewer');
+function selectAllAndCopyInPDFViewer() {
+  // Method 1: Try Ctrl+A then Ctrl+C
+  document.execCommand('selectAll');
   
-  if (pdfViewer) {
-    // Try to get text from the internal text layer
-    const textLayer = pdfViewer.shadowRoot?.querySelector('.textLayer');
+  let selectedText = window.getSelection().toString();
+  
+  if (selectedText && selectedText.length > 50) {
+    // Try to copy
+    document.execCommand('copy');
+    return { success: true, charCount: selectedText.length, method: 'execCommand' };
+  }
+
+  // Method 2: Try finding text in pdf-viewer shadow DOM
+  const pdfViewer = document.querySelector('pdf-viewer');
+  if (pdfViewer && pdfViewer.shadowRoot) {
+    const textLayer = pdfViewer.shadowRoot.querySelector('.textLayer');
     if (textLayer) {
-      const text = textLayer.textContent?.trim();
-      if (text && text.length > 0) {
-        return text;
-      }
-    }
-    
-    // Alternative: try to get text from annotation layer
-    const annotationLayer = pdfViewer.shadowRoot?.querySelector('.annotationLayer');
-    if (annotationLayer) {
-      const annotations = annotationLayer.querySelectorAll('span');
-      const texts = Array.from(annotations).map(s => s.textContent?.trim()).filter(t => t);
-      if (texts.length > 0) {
-        return texts.join('\n');
+      selectedText = textLayer.textContent || '';
+      if (selectedText.length > 50) {
+        // Create a temp textarea to copy from
+        const ta = document.createElement('textarea');
+        ta.value = selectedText;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        return { success: true, charCount: selectedText.length, method: 'shadowDOM' };
       }
     }
   }
 
-  // Fallback: try selecting text the old-fashioned way
-  const sel = window.getSelection();
-  const ranges = [];
-  
-  // Try to select all selectable text on page
+  // Method 3: Walk all text nodes
   const walker = document.createTreeWalker(
     document.body,
     NodeFilter.SHOW_TEXT,
@@ -444,13 +448,7 @@ function extractTextFromChromePDFViewer() {
         const parent = node.parentElement;
         if (!parent) return NodeFilter.FILTER_REJECT;
         const tag = parent.tagName?.toLowerCase() || '';
-        if (['script', 'style', 'noscript'].includes(tag)) {
-          return NodeFilter.FILTER_REJECT;
-        }
-        const style = window.getComputedStyle(parent);
-        if (style.display === 'none' || style.visibility === 'hidden') {
-          return NodeFilter.FILTER_REJECT;
-        }
+        if (['script', 'style'].includes(tag)) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     }
@@ -460,12 +458,67 @@ function extractTextFromChromePDFViewer() {
   let node;
   while ((node = walker.nextNode())) {
     const text = node.textContent?.trim();
-    if (text && text.length > 0) {
-      lines.push(text);
-    }
+    if (text && text.length > 0) lines.push(text);
   }
 
-  return lines.join('\n');
+  selectedText = lines.join('\n');
+  if (selectedText.length > 50) {
+    const ta = document.createElement('textarea');
+    ta.value = selectedText;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    return { success: true, charCount: selectedText.length, method: 'treeWalker' };
+  }
+
+  return { success: false, error: 'No readable text found' };
+}
+
+/**
+ * Last resort: briefly activate the tab to allow clipboard access.
+ */
+async function handlePDFViaActiveTab(url, backgroundTabId) {
+  let tempTabId = null;
+
+
+  try {
+    // Create a NEW active tab
+    const newTab = await chrome.tabs.create({
+      url: url,
+      active: true, // This will switch focus temporarily
+    });
+    tempTabId = newTab.id;
+
+
+    await waitForTabLoad(tempTabId);
+    await new Promise(r => setTimeout(r, 3000)); // Wait for viewer
+
+    // Try copy via script injection (now that tab is active)
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tempTabId },
+      func: selectAllAndCopyInPDFViewer,
+    });
+
+    if (results && results[0] && results[0].result && results[0].result.success) {
+      showNotification(
+        "✅ Copied!",
+        `${results[0].result.charCount} characters copied.`
+      );
+    } else {
+      throw new Error("Could not extract text from PDF.");
+    }
+  } finally {
+    // Cleanup
+    if (tempTabId !== null) {
+      try { await chrome.tabs.remove(tempTabId); } catch (e) {}
+    }
+    if (backgroundTabId !== null) {
+      try { await chrome.tabs.remove(backgroundTabId); } catch (e) {}
+    }
+  }
 }
 
 // ─── Message Listener (from content scripts, if needed) ───────────────────────
