@@ -60,9 +60,107 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
 
+
+    return true;
+  }
+
+  if (message.action === "downloadAndParse") {
+    handleDownloadAndParse(message.url)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+
     return true;
   }
 });
+
+// ─── Download + Parse PDF ──────────────────────────────────────────────────────
+
+/**
+ * Download a PDF and parse it using PDF.js.
+ * This is the fallback when the original fetch fails or returns no text.
+ */
+async function handleDownloadAndParse(url) {
+  if (typeof pdfjsLib === "undefined") {
+    return { success: false, error: "PDF.js is not loaded." };
+  }
+
+  console.log("[Offscreen] Downloading PDF:", url);
+
+  let arrayBuffer;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    arrayBuffer = await response.arrayBuffer();
+    console.log("[Offscreen] PDF downloaded:", arrayBuffer.byteLength, "bytes");
+  } catch (err) {
+    throw new Error(`Failed to download PDF: ${err.message}`);
+  }
+
+  // Load with PDF.js using different options for stubborn PDFs
+  let pdfDoc;
+  try {
+    const loadingTask = pdfjsLib.getDocument({
+      data: arrayBuffer,
+      // Try these options for better compatibility
+      verbosity: 0,
+      // Use a standard font handler
+      cMapUrl: null, // Don't rely on external CMaps
+      cMapPacked: true,
+    });
+    pdfDoc = await loadingTask.promise;
+    console.log("[Offscreen] PDF loaded via fallback, pages:", pdfDoc.numPages);
+  } catch (err) {
+    throw new Error(`PDF.js could not parse file: ${err.message}`);
+  }
+
+  // Extract text from all pages
+  const allText = [];
+  for (let i = 1; i <= pdfDoc.numPages; i++) {
+    try {
+      const page = await pdfDoc.getPage(i);
+      const content = await page.getTextContent();
+      
+      // Try to extract text in different ways
+      let pageText = "";
+      
+      // Method 1: items-based extraction
+      const items = content.items || [];
+      if (items.length > 0) {
+        pageText = items.map(item => item.str).join(" ");
+      }
+      
+      // If still empty, try the raw content string
+      if (!pageText || pageText.trim().length === 0) {
+        if (content.text) {
+          pageText = content.text;
+        }
+      }
+
+      if (pageText && pageText.trim().length > 0) {
+        allText.push(`--- Page ${i} ---\n${pageText}`);
+      } else {
+        // Even if no text, mark the page
+        allText.push(`--- Page ${i} ---
+[Page ${i} of ${pdfDoc.numPages}]`);
+      }
+    } catch (pageErr) {
+      allText.push(`--- Page ${i} ---
+[Could not read page ${i}]`);
+    }
+  }
+
+  const fullText = allText.join("\n\n");
+  
+  console.log("[Offscreen] Fallback extraction complete:", pdfDoc.numPages, "pages,", fullText.length, "chars");
+
+  return {
+    success: true,
+    text: fullText,
+    pageCount: pdfDoc.numPages,
+  };
+}
 
 // ─── PDF Parsing ──────────────────────────────────────────────────────────────
 
