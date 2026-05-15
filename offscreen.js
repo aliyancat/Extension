@@ -73,7 +73,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// ─── Download + Parse PDF ──────────────────────────────────────────────────────
+// ─── OCR-based PDF Parsing (Tesseract.js) ─────────────────────────────────────
 
 /**
  * Download a PDF and parse it using PDF.js.
