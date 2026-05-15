@@ -342,249 +342,38 @@ function showNotification(title, message) {
   });
 }
 
-// ─── Fallback: Extract & copy text via Chrome's built-in PDF viewer ───────────
+// ─── Fallback: Download PDF + Extract Text ───────────────────────────────────
 
 /**
- * When PDF.js fails to extract text, we open the PDF in a hidden tab
- * and use document.execCommand to select + copy all text.
- * This works because Chrome's PDF viewer renders selectable text.
+ * Download the PDF to a Blob, then use PDF.js in offscreen doc to parse it.
+ * This bypasses Chrome's PDF viewer sandbox entirely.
  */
 async function handlePDFViaChromeViewer(url) {
-  let tabId = null;
-
   try {
-    showNotification("Fallback Mode", "Opening in Chrome viewer... Please wait 5 seconds.");
+    showNotification("Fallback Mode", "Downloading PDF for processing...");
 
-    // Open PDF in background tab (Chrome's internal viewer)
-    const newTab = await chrome.tabs.create({
+    console.log("[PDF Copier] Downloading PDF via offscreen...");
+
+    // Use offscreen document to download and process
+    await ensureOffscreenDocument();
+
+    const response = await sendMessageToOffscreen({
+      action: "downloadAndParse",
       url: url,
-      active: false,
-    });
-    tabId = newTab.id;
-
-    console.log("[PDF Copier] Opened PDF in background tab:", tabId);
-
-    // Wait for page to load
-    await waitForTabLoad(tabId);
-
-    // Wait 5 seconds for Chrome's PDF viewer to fully initialize
-    console.log("[PDF Copier] Waiting 5 seconds for PDF viewer...");
-    await new Promise(r => setTimeout(r, 5000));
-
-    // Try to copy multiple times with small delays
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      console.log(`[PDF Copier] Copy attempt ${attempt}/3...`);
-      
-      const results = await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        func: selectAllAndCopyInPDFViewer,
-      });
-
-      if (results && results[0] && results[0].result && results[0].result.success) {
-        showNotification(
-          "✅ Copied!",
-          `${results[0].result.charCount} characters copied.`
-        );
-        return; // Success!
-      }
-
-      if (attempt < 3) {
-        // Wait a bit before retrying
-        await new Promise(r => setTimeout(r, 1500));
-      }
-    }
-
-    // All attempts failed - try the active tab method as last resort
-    console.log("[PDF Copier] Background tab copy failed, trying active tab method...");
-    await handlePDFViaActiveTab(url, tabId);
-    tabId = null; // handlePDFViaActiveTab will clean up its own tab
-    
-  } catch (err) {
-    console.error("[PDF Copier] Chrome viewer fallback error:", err);
-    throw new Error("Could not extract text from Chrome's PDF viewer.");
-  } finally {
-    if (tabId !== null) {
-      try {
-        await chrome.tabs.remove(tabId);
-        console.log("[PDF Copier] Closed background tab:", tabId);
-      } catch (e) {
-        // Tab may have already been closed
-      }
-    }
-  }
-}
-
-/**
- * Extract and copy text from Chrome's PDF viewer.
- * Tries multiple methods to get the text.
- */
-function selectAllAndCopyInPDFViewer() {
-  let extractedText = '';
-  let method = '';
-
-  // METHOD 1: Access Chrome's pdf-viewer shadow DOM directly
-  try {
-    const pdfViewer = document.querySelector('pdf-viewer');
-    if (pdfViewer && pdfViewer.shadowRoot) {
-      const shadow = pdfViewer.shadowRoot;
-      
-      // Try .textLayer first
-      let textLayer = shadow.querySelector('.textLayer');
-      if (!textLayer) {
-        // Try finding any div with text in shadow DOM
-        const allDivs = shadow.querySelectorAll('div');
-        for (const div of allDivs) {
-          if (div.textContent && div.textContent.length > 100) {
-            textLayer = div;
-            break;
-          }
-        }
-      }
-      
-      if (textLayer) {
-        extractedText = textLayer.textContent || '';
-        extractedText = extractedText.trim();
-        if (extractedText.length > 50) {
-          method = 'shadowDOM-textLayer';
-        }
-      }
-    }
-  } catch (e) {
-    console.log('Shadow DOM method failed:', e.message);
-  }
-
-  // METHOD 2: Use find() to search for text content
-  if (!extractedText || extractedText.length < 50) {
-    try {
-      // window.find works on rendered text in some cases
-      if (window.find) {
-        const found = window.find('text', false, false, true);
-        if (found) {
-          const sel = window.getSelection();
-          if (sel && sel.toString()) {
-            extractedText = sel.toString();
-            method = 'window.find';
-          }
-        }
-      }
-    } catch (e) {
-      console.log('window.find failed:', e.message);
-    }
-  }
-
-  // METHOD 3: Select all via execCommand then get selection
-  if (!extractedText || extractedText.length < 50) {
-    try {
-      document.execCommand('selectAll', false, null);
-      const sel = window.getSelection();
-      if (sel) {
-        extractedText = sel.toString();
-        if (extractedText && extractedText.length > 50) {
-          method = 'execCommand-selectAll';
-        }
-      }
-    } catch (e) {
-      console.log('execCommand failed:', e.message);
-    }
-  }
-
-  // METHOD 4: Walk all nodes including nested shadow content
-  if (!extractedText || extractedText.length < 50) {
-    const collectText = (node) => {
-      let text = '';
-      if (node.nodeType === Node.TEXT_NODE) {
-        text = node.textContent.trim();
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        // Skip invisible elements
-        const style = window.getComputedStyle(node);
-        if (style.display !== 'none' && style.visibility !== 'hidden') {
-          // Try shadowRoot if it exists
-          if (node.shadowRoot) {
-            text += collectText(node.shadowRoot);
-          } else {
-            for (const child of node.childNodes) {
-              text += collectText(child) + ' ';
-            }
-          }
-        }
-      }
-      return text;
-    };
-
-    const allText = collectText(document.body);
-    if (allText && allText.trim().length > 50) {
-      extractedText = allText.trim();
-      method = 'deep-tree-walker';
-    }
-  }
-
-  // If we got text, try to copy it
-  if (extractedText && extractedText.length > 50) {
-    // Try clipboard API first
-    try {
-      navigator.clipboard.writeText(extractedText);
-      return { success: true, charCount: extractedText.length, method: method + '-clipboardAPI' };
-    } catch (e) {
-      // Fall back to textarea trick
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = extractedText;
-        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        return { success: true, charCount: extractedText.length, method: method + '-textarea' };
-      } catch (e2) {
-        console.log('All copy methods failed');
-      }
-    }
-  }
-
-  return { success: false, error: 'No readable text found', method: method };
-}
-
-/**
- * Last resort: briefly activate the tab to allow clipboard access.
- */
-async function handlePDFViaActiveTab(url, backgroundTabId) {
-  let tempTabId = null;
-
-
-  try {
-    // Create a NEW active tab
-    const newTab = await chrome.tabs.create({
-      url: url,
-      active: true, // This will switch focus temporarily
-    });
-    tempTabId = newTab.id;
-
-
-    await waitForTabLoad(tempTabId);
-    await new Promise(r => setTimeout(r, 3000)); // Wait for viewer
-
-    // Try copy via script injection (now that tab is active)
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tempTabId },
-      func: selectAllAndCopyInPDFViewer,
     });
 
-    if (results && results[0] && results[0].result && results[0].result.success) {
+    if (response.success) {
+      await writeToClipboardViaOffscreen(response.text);
       showNotification(
         "✅ Copied!",
-        `${results[0].result.charCount} characters copied.`
+        `${response.text.length} characters extracted.`
       );
     } else {
-      throw new Error("Could not extract text from PDF.");
+      throw new Error(response.error || "Failed to process PDF.");
     }
-  } finally {
-    // Cleanup
-    if (tempTabId !== null) {
-      try { await chrome.tabs.remove(tempTabId); } catch (e) {}
-    }
-    if (backgroundTabId !== null) {
-      try { await chrome.tabs.remove(backgroundTabId); } catch (e) {}
-    }
+  } catch (err) {
+    console.error("[PDF Copier] Download fallback error:", err);
+    throw new Error("Could not extract text from this PDF. The PDF may use a non-standard encoding that Chrome's PDF viewer can render but our tools cannot decode.");
   }
 }
 
