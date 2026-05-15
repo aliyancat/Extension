@@ -353,7 +353,7 @@ async function handlePDFViaChromeViewer(url) {
   let tabId = null;
 
   try {
-    showNotification("Fallback Mode", "Trying Chrome's built-in PDF viewer...");
+    showNotification("Fallback Mode", "Opening in Chrome viewer... Please wait 5 seconds.");
 
     // Open PDF in background tab (Chrome's internal viewer)
     const newTab = await chrome.tabs.create({
@@ -367,27 +367,38 @@ async function handlePDFViaChromeViewer(url) {
     // Wait for page to load
     await waitForTabLoad(tabId);
 
-    // Wait for Chrome's PDF viewer to fully initialize
-    await new Promise(r => setTimeout(r, 3000));
+    // Wait 5 seconds for Chrome's PDF viewer to fully initialize
+    console.log("[PDF Copier] Waiting 5 seconds for PDF viewer...");
+    await new Promise(r => setTimeout(r, 5000));
 
-    // Inject script to select all text AND copy it directly in this tab
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tabId },
-      func: selectAllAndCopyInPDFViewer,
-    });
+    // Try to copy multiple times with small delays
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      console.log(`[PDF Copier] Copy attempt ${attempt}/3...`);
+      
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: selectAllAndCopyInPDFViewer,
+      });
 
+      if (results && results[0] && results[0].result && results[0].result.success) {
+        showNotification(
+          "✅ Copied!",
+          `${results[0].result.charCount} characters copied.`
+        );
+        return; // Success!
+      }
 
-    // Check result
-    if (results && results[0] && results[0].result && results[0].result.success) {
-      showNotification(
-        "✅ Copied via Chrome Viewer!",
-        `${results[0].result.charCount} characters copied.`
-      );
-    } else {
-      // Try alternative: open in ACTIVE tab temporarily
-      console.log("[PDF Copier] Background tab copy failed, trying active tab...");
-      await handlePDFViaActiveTab(url, tabId);
+      if (attempt < 3) {
+        // Wait a bit before retrying
+        await new Promise(r => setTimeout(r, 1500));
+      }
     }
+
+    // All attempts failed - try the active tab method as last resort
+    console.log("[PDF Copier] Background tab copy failed, trying active tab method...");
+    await handlePDFViaActiveTab(url, tabId);
+    tabId = null; // handlePDFViaActiveTab will clean up its own tab
+    
   } catch (err) {
     console.error("[PDF Copier] Chrome viewer fallback error:", err);
     throw new Error("Could not extract text from Chrome's PDF viewer.");
