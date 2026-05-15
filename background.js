@@ -446,10 +446,20 @@ async function handlePDFViaChromeViewer(url) {
 async function extractPDFTextViaConsole() {
   return new Promise(async (resolve, reject) => {
     try {
+      // Load Tesseract from CDN inside the tab (same as user's working code!)
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js';
+      document.head.appendChild(script);
+
+      // Wait for Tesseract to load
+      await new Promise((res, rej) => {
+        script.onload = res;
+        script.onerror = () => rej(new Error('Tesseract failed to load'));
+      });
+
       // Get PDF bytes
       const buf = await fetch(window.location.href, { credentials: 'include' }).then(r => r.arrayBuffer());
       const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-
 
       let fullText = '';
       for (let i = 1; i <= pdf.numPages; i++) {
@@ -461,6 +471,7 @@ async function extractPDFTextViaConsole() {
         await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
         const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
         fullText += text + '\n';
+        console.log(`Page ${i} done`);
       }
 
       resolve(fullText);
