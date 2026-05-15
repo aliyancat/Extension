@@ -415,95 +415,133 @@ async function handlePDFViaChromeViewer(url) {
 }
 
 /**
- * Try to select all text in Chrome's PDF viewer and copy it.
- * Uses simulated keyboard shortcuts which Chrome's PDF viewer responds to.
+ * Extract and copy text from Chrome's PDF viewer.
+ * Tries multiple methods to get the text.
  */
 function selectAllAndCopyInPDFViewer() {
-  // Chrome's PDF viewer listens for Ctrl+A/Ctrl+C at the window level
-  // Simulate keyboard events to trigger its built-in select-all and copy
-  
-  // Create and dispatch Ctrl+A (Select All)
-  function dispatchKey(combo) {
-    const modifiers = {};
-    if (combo.includes('Ctrl')) modifiers.ctrlKey = true;
-    if (combo.includes('Shift')) modifiers.shiftKey = true;
-    if (combo.includes('Alt')) modifiers.altKey = true;
-    if (combo.includes('Meta')) modifiers.metaKey = true;
-    
-    const key = combo.split('+').pop();
-    const event = new KeyboardEvent('keydown', {
-      key: key,
-      code: 'Key' + key.toUpperCase(),
-      bubbles: true,
-      cancelable: true,
-      ...modifiers
-    });
-    document.dispatchEvent(event);
-  }
+  let extractedText = '';
+  let method = '';
 
-  // Try Ctrl+A then Ctrl+C
-  document.dispatchEvent(new KeyboardEvent('keydown', {
-    key: 'a', code: 'KeyA', ctrlKey: true, bubbles: true, cancelable: true
-  }));
-  
-  let selectedText = window.getSelection().toString();
-  
-  if (selectedText && selectedText.length > 50) {
-    document.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'c', code: 'KeyC', ctrlKey: true, bubbles: true, cancelable: true
-    }));
-    return { success: true, charCount: selectedText.length, method: 'keyboard' };
-  }
-
-  // If selection didn't work, try execCommand approach
+  // METHOD 1: Access Chrome's pdf-viewer shadow DOM directly
   try {
-    document.execCommand('selectAll');
-  } catch(e) {}
-  
-  selectedText = window.getSelection().toString();
-  
-  if (selectedText && selectedText.length > 50) {
+    const pdfViewer = document.querySelector('pdf-viewer');
+    if (pdfViewer && pdfViewer.shadowRoot) {
+      const shadow = pdfViewer.shadowRoot;
+      
+      // Try .textLayer first
+      let textLayer = shadow.querySelector('.textLayer');
+      if (!textLayer) {
+        // Try finding any div with text in shadow DOM
+        const allDivs = shadow.querySelectorAll('div');
+        for (const div of allDivs) {
+          if (div.textContent && div.textContent.length > 100) {
+            textLayer = div;
+            break;
+          }
+        }
+      }
+      
+      if (textLayer) {
+        extractedText = textLayer.textContent || '';
+        extractedText = extractedText.trim();
+        if (extractedText.length > 50) {
+          method = 'shadowDOM-textLayer';
+        }
+      }
+    }
+  } catch (e) {
+    console.log('Shadow DOM method failed:', e.message);
+  }
+
+  // METHOD 2: Use find() to search for text content
+  if (!extractedText || extractedText.length < 50) {
     try {
-      document.execCommand('copy');
-    } catch(e) {}
-    return { success: true, charCount: selectedText.length, method: 'execCommand' };
+      // window.find works on rendered text in some cases
+      if (window.find) {
+        const found = window.find('text', false, false, true);
+        if (found) {
+          const sel = window.getSelection();
+          if (sel && sel.toString()) {
+            extractedText = sel.toString();
+            method = 'window.find';
+          }
+        }
+      }
+    } catch (e) {
+      console.log('window.find failed:', e.message);
+    }
   }
 
-  // Last try: walk text nodes
-  const walker = document.createTreeWalker(
-    document.body,
-    NodeFilter.SHOW_TEXT,
-    { acceptNode: (node) => {
-      const tag = node.parentElement?.tagName?.toLowerCase() || '';
-      if (['script', 'style'].includes(tag)) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    }}
-  );
-
-  const lines = [];
-  let node;
-  while ((node = walker.nextNode())) {
-    const text = node.textContent?.trim();
-    if (text && text.length > 0) lines.push(text);
-  }
-
-  const allText = lines.join('\n');
-  
-  // If we found text, try to copy it via textarea trick
-  if (allText.length > 50) {
-    const ta = document.createElement('textarea');
-    ta.value = allText;
-    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-    document.body.appendChild(ta);
-    ta.select();
+  // METHOD 3: Select all via execCommand then get selection
+  if (!extractedText || extractedText.length < 50) {
     try {
-      document.execCommand('copy');
-    } catch(e) {}
-    document.body.removeChild(ta);
-    return { success: true, charCount: allText.length, method: 'treeWalker' };
+      document.execCommand('selectAll', false, null);
+      const sel = window.getSelection();
+      if (sel) {
+        extractedText = sel.toString();
+        if (extractedText && extractedText.length > 50) {
+          method = 'execCommand-selectAll';
+        }
+      }
+    } catch (e) {
+      console.log('execCommand failed:', e.message);
+    }
   }
 
-  return { success: false, error: 'No readable text found' };
+  // METHOD 4: Walk all nodes including nested shadow content
+  if (!extractedText || extractedText.length < 50) {
+    const collectText = (node) => {
+      let text = '';
+      if (node.nodeType === Node.TEXT_NODE) {
+        text = node.textContent.trim();
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        // Skip invisible elements
+        const style = window.getComputedStyle(node);
+        if (style.display !== 'none' && style.visibility !== 'hidden') {
+          // Try shadowRoot if it exists
+          if (node.shadowRoot) {
+            text += collectText(node.shadowRoot);
+          } else {
+            for (const child of node.childNodes) {
+              text += collectText(child) + ' ';
+            }
+          }
+        }
+      }
+      return text;
+    };
+
+    const allText = collectText(document.body);
+    if (allText && allText.trim().length > 50) {
+      extractedText = allText.trim();
+      method = 'deep-tree-walker';
+    }
+  }
+
+  // If we got text, try to copy it
+  if (extractedText && extractedText.length > 50) {
+    // Try clipboard API first
+    try {
+      navigator.clipboard.writeText(extractedText);
+      return { success: true, charCount: extractedText.length, method: method + '-clipboardAPI' };
+    } catch (e) {
+      // Fall back to textarea trick
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = extractedText;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        return { success: true, charCount: extractedText.length, method: method + '-textarea' };
+      } catch (e2) {
+        console.log('All copy methods failed');
+      }
+    }
+  }
+
+  return { success: false, error: 'No readable text found', method: method };
 }
 
 /**
