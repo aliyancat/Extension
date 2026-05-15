@@ -9,6 +9,7 @@
     1. PDF.js requires a Worker and Blob URLs — not available in service workers.
     2. navigator.clipboard.writeText() requires a "focused" document context.
        An offscreen document satisfies this requirement in Chrome MV3.
+    3. Tesseract.js requires a DOM environment to run OCR on canvas elements.
 
   How it works:
     background.js creates this document silently, then sends it messages.
@@ -22,6 +23,8 @@
   <body>
     <!-- PDF.js library loaded from local copy (bundled with extension) -->
     <script src="lib/pdf.min.js"></script>
+    <!-- Tesseract.js for OCR (loaded from CDN) -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <!-- Our offscreen logic -->
     <script src="offscreen.js"></script>
   </body>
