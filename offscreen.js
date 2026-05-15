@@ -83,83 +83,75 @@ async function handleDownloadAndParse(url) {
   if (typeof pdfjsLib === "undefined") {
     return { success: false, error: "PDF.js is not loaded." };
   }
+  if (typeof Tesseract === "undefined") {
+    return { success: false, error: "Tesseract.js is not loaded." };
+  }
 
-  console.log("[Offscreen] Downloading PDF:", url);
+  console.log("[Offscreen] Downloading PDF for OCR:", url);
 
   let arrayBuffer;
   try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) throw new Error("HTTP " + response.status);
     arrayBuffer = await response.arrayBuffer();
     console.log("[Offscreen] PDF downloaded:", arrayBuffer.byteLength, "bytes");
   } catch (err) {
-    throw new Error(`Failed to download PDF: ${err.message}`);
+    throw new Error("Failed to download PDF: " + err.message);
   }
 
-  // Load with PDF.js using different options for stubborn PDFs
   let pdfDoc;
   try {
-    const loadingTask = pdfjsLib.getDocument({
-      data: arrayBuffer,
-      // Try these options for better compatibility
-      verbosity: 0,
-      // Use a standard font handler
-      cMapUrl: null, // Don't rely on external CMaps
-      cMapPacked: true,
-    });
-    pdfDoc = await loadingTask.promise;
-    console.log("[Offscreen] PDF loaded via fallback, pages:", pdfDoc.numPages);
+    pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    console.log("[Offscreen] PDF loaded, pages:", pdfDoc.numPages);
   } catch (err) {
-    throw new Error(`PDF.js could not parse file: ${err.message}`);
+    throw new Error("PDF.js could not load file: " + err.message);
   }
 
-  // Extract text from all pages
   const allText = [];
-  for (let i = 1; i <= pdfDoc.numPages; i++) {
-    try {
-      const page = await pdfDoc.getPage(i);
-      const content = await page.getTextContent();
-      
-      // Try to extract text in different ways
-      let pageText = "";
-      
-      // Method 1: items-based extraction
-      const items = content.items || [];
-      if (items.length > 0) {
-        pageText = items.map(item => item.str).join(" ");
-      }
-      
-      // If still empty, try the raw content string
-      if (!pageText || pageText.trim().length === 0) {
-        if (content.text) {
-          pageText = content.text;
-        }
-      }
+  const scale = 2;
 
-      if (pageText && pageText.trim().length > 0) {
-        allText.push(`--- Page ${i} ---\n${pageText}`);
+  console.log("[Offscreen] Starting Tesseract worker...");
+  const worker = await Tesseract.createWorker("eng", 1, {
+    logger: (m) => {
+      if (m.status === "recognizing text") {
+        console.log("[Offscreen] OCR progress:", Math.round(m.progress * 100) + "%");
+      }
+    },
+  });
+
+  for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+    try {
+      console.log("[Offscreen] Rendering page", pageNum, "/", pdfDoc.numPages, "...");
+
+      const page = await pdfDoc.getPage(pageNum);
+      const viewport = page.getViewport({ scale });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+      await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+
+      console.log("[Offscreen] OCR'ing page", pageNum, "...");
+      const { data: { text } } = await worker.recognize(canvas);
+
+      if (text && text.trim().length > 0) {
+        allText.push("--- Page " + pageNum + " ---\n" + text.trim());
       } else {
-        // Even if no text, mark the page
-        allText.push(`--- Page ${i} ---
-[Page ${i} of ${pdfDoc.numPages}]`);
+        allText.push("--- Page " + pageNum + " ---\n[No text detected]");
       }
     } catch (pageErr) {
-      allText.push(`--- Page ${i} ---
-[Could not read page ${i}]`);
+      console.warn("[Offscreen] Error on page", pageNum, ":", pageErr.message);
+      allText.push("--- Page " + pageNum + " ---\n[Could not process page " + pageNum + "]");
     }
   }
 
-  const fullText = allText.join("\n\n");
-  
-  console.log("[Offscreen] Fallback extraction complete:", pdfDoc.numPages, "pages,", fullText.length, "chars");
+  await worker.terminate();
 
-  return {
-    success: true,
-    text: fullText,
-    pageCount: pdfDoc.numPages,
-  };
+  const fullText = allText.join("\n\n");
+  console.log("[Offscreen] OCR complete:", pdfDoc.numPages, "pages,", fullText.length, "chars");
+
+  return { success: true, text: fullText, pageCount: pdfDoc.numPages };
 }
 
 // ─── PDF Parsing ──────────────────────────────────────────────────────────────
