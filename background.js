@@ -240,10 +240,13 @@ function extractPageText() {
 
 // ─── Offscreen Document Management ───────────────────────────────────────────
 
-let offscreenDocumentCreated = false;
+
+let offscreenDocumentReady = false;
+let offscreenMessageId = 0;
+
 
 /**
- * Creates the offscreen document if it doesn't already exist.
+ * Creates the offscreen document fresh (or reconnects if already exists).
  * Chrome only allows one offscreen document per extension.
  */
 async function ensureOffscreenDocument() {
@@ -254,19 +257,32 @@ async function ensureOffscreenDocument() {
   });
 
   if (existingContexts.length > 0) {
-    console.log("[PDF Copier] Offscreen document already exists.");
+    console.log("[PDF Copier] Offscreen document exists, using it.");
+    offscreenDocumentReady = true;
     return;
   }
 
-  console.log("[PDF Copier] Creating offscreen document...");
-  await chrome.offscreen.createDocument({
-    url: OFFSCREEN_URL,
-    reasons: ["BLOBS"], // PDF.js needs Blob/URL.createObjectURL
-    justification: "Parse PDF files using PDF.js in a DOM environment",
-  });
+  // Close any existing (in case it's broken)
+  try {
+    // There's no official "close" API, but we can try to work around by creating fresh
+    // Chrome will replace the old one
+  } catch (e) {}
 
-  offscreenDocumentCreated = true;
-  console.log("[PDF Copier] Offscreen document created.");
+  console.log("[PDF Copier] Creating fresh offscreen document...");
+  
+  try {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: ["BLOBS"],
+      justification: "Parse PDF files using PDF.js",
+    });
+    offscreenDocumentReady = true;
+    console.log("[PDF Copier] Offscreen document created successfully.");
+  } catch (err) {
+    console.error("[PDF Copier] Failed to create offscreen document:", err);
+    offscreenDocumentReady = false;
+    throw err;
+  }
 }
 
 /**
