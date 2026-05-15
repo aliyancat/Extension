@@ -79,44 +79,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
  * Download a PDF and parse it using PDF.js.
  * This is the fallback when the original fetch fails or returns no text.
  */
-// ─── Dynamic Tesseract Loader ─────────────────────────────────────────────────
+// ─── OCR-based PDF Parsing (Tesseract.js) ─────────────────────────────────────
 
-async function loadTesseract() {
-  if (typeof Tesseract !== "undefined") {
-    return Tesseract;
-  }
-
-  console.log("[Offscreen] Loading Tesseract.js from CDN...");
-  
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-    script.onload = () => {
-      console.log("[Offscreen] Tesseract.js loaded!");
-      resolve(Tesseract);
-    };
-    script.onerror = (err) => {
-      reject(new Error("Failed to load Tesseract.js from CDN"));
-    };
-    document.head.appendChild(script);
-  });
-}
-
-// ─── OCR-based PDF Parsing ───────────────────────────────────────────────────
 
 async function handleDownloadAndParse(url) {
   if (typeof pdfjsLib === "undefined") {
     return { success: false, error: "PDF.js is not loaded." };
   }
-
-  // Load Tesseract dynamically if not already loaded
-  let Tesseract;
-  try {
-    Tesseract = await loadTesseract();
-  } catch (err) {
-    return { success: false, error: err.message };
+  if (typeof Tesseract === "undefined") {
+    return { success: false, error: "Tesseract.js is not loaded." };
   }
-
   console.log("[Offscreen] Downloading PDF for OCR:", url);
 
   let arrayBuffer;
