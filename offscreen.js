@@ -167,44 +167,52 @@ async function handleParsePDF(url) {
 /**
  * Writes text to the system clipboard.
  *
- * WHY HERE and not in background.js (service worker)?
- * Chrome's Clipboard API requires the call to happen in a "focused" document
- * context. Service workers don't have a document, so they can't call
- * navigator.clipboard.writeText(). Offscreen documents are documents,
- * so this works here.
- *
  * @param {string} text - The text to write to clipboard.
  */
 async function handleCopyToClipboard(text) {
+  // Try the modern Clipboard API first
   try {
     await navigator.clipboard.writeText(text);
-    console.log("[Offscreen] Clipboard write successful, length:", text.length);
+    console.log("[Offscreen] Clipboard API succeeded, length:", text.length);
     return { success: true };
   } catch (clipErr) {
-    // Fallback: use the old execCommand approach (works in more contexts)
-    console.warn("[Offscreen] Clipboard API failed, trying execCommand fallback:", clipErr);
-
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
-    textArea.style.position = "fixed";
-    textArea.style.opacity = "0";
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-
-    try {
-      const success = document.execCommand("copy");
-      document.body.removeChild(textArea);
-
-      if (success) {
-        console.log("[Offscreen] Fallback clipboard write succeeded.");
-        return { success: true };
-      } else {
-        throw new Error("execCommand copy returned false.");
-      }
-    } catch (fallbackErr) {
-      document.body.removeChild(textArea);
-      throw new Error(`Clipboard write failed: ${fallbackErr.message}`);
-    }
+    console.warn("[Offscreen] Clipboard API failed:", clipErr.message);
   }
+
+  // Fallback 1: Create a temporary input/textarea element
+  try {
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    const success = document.execCommand('copy');
+    document.body.removeChild(el);
+    if (success) {
+      console.log("[Offscreen] execCommand copy succeeded!");
+      return { success: true };
+    }
+  } catch (e1) {
+    console.warn("[Offscreen] Fallback 1 failed:", e1.message);
+  }
+
+  // Fallback 2: Try with an input element
+  try {
+    const input = document.createElement('input');
+    input.value = text;
+    input.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
+    document.body.appendChild(input);
+    input.select();
+    const success = document.execCommand('copy');
+    document.body.removeChild(input);
+    if (success) {
+      console.log("[Offscreen] execCommand (input) copy succeeded!");
+      return { success: true };
+    }
+  } catch (e2) {
+    console.warn("[Offscreen] Fallback 2 failed:", e2.message);
+  }
+
+  throw new Error("All clipboard methods failed. Try copying manually with Ctrl+A → Ctrl+C.");
 }
