@@ -405,53 +405,68 @@ async function handlePDFViaChromeViewer(url) {
 
 /**
  * Try to select all text in Chrome's PDF viewer and copy it.
+ * Uses simulated keyboard shortcuts which Chrome's PDF viewer responds to.
  */
 function selectAllAndCopyInPDFViewer() {
-  // Method 1: Try Ctrl+A then Ctrl+C
-  document.execCommand('selectAll');
+  // Chrome's PDF viewer listens for Ctrl+A/Ctrl+C at the window level
+  // Simulate keyboard events to trigger its built-in select-all and copy
+  
+  // Create and dispatch Ctrl+A (Select All)
+  function dispatchKey(combo) {
+    const modifiers = {};
+    if (combo.includes('Ctrl')) modifiers.ctrlKey = true;
+    if (combo.includes('Shift')) modifiers.shiftKey = true;
+    if (combo.includes('Alt')) modifiers.altKey = true;
+    if (combo.includes('Meta')) modifiers.metaKey = true;
+    
+    const key = combo.split('+').pop();
+    const event = new KeyboardEvent('keydown', {
+      key: key,
+      code: 'Key' + key.toUpperCase(),
+      bubbles: true,
+      cancelable: true,
+      ...modifiers
+    });
+    document.dispatchEvent(event);
+  }
+
+  // Try Ctrl+A then Ctrl+C
+  document.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'a', code: 'KeyA', ctrlKey: true, bubbles: true, cancelable: true
+  }));
   
   let selectedText = window.getSelection().toString();
   
   if (selectedText && selectedText.length > 50) {
-    // Try to copy
-    document.execCommand('copy');
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'c', code: 'KeyC', ctrlKey: true, bubbles: true, cancelable: true
+    }));
+    return { success: true, charCount: selectedText.length, method: 'keyboard' };
+  }
+
+  // If selection didn't work, try execCommand approach
+  try {
+    document.execCommand('selectAll');
+  } catch(e) {}
+  
+  selectedText = window.getSelection().toString();
+  
+  if (selectedText && selectedText.length > 50) {
+    try {
+      document.execCommand('copy');
+    } catch(e) {}
     return { success: true, charCount: selectedText.length, method: 'execCommand' };
   }
 
-  // Method 2: Try finding text in pdf-viewer shadow DOM
-  const pdfViewer = document.querySelector('pdf-viewer');
-  if (pdfViewer && pdfViewer.shadowRoot) {
-    const textLayer = pdfViewer.shadowRoot.querySelector('.textLayer');
-    if (textLayer) {
-      selectedText = textLayer.textContent || '';
-      if (selectedText.length > 50) {
-        // Create a temp textarea to copy from
-        const ta = document.createElement('textarea');
-        ta.value = selectedText;
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        document.body.removeChild(ta);
-        return { success: true, charCount: selectedText.length, method: 'shadowDOM' };
-      }
-    }
-  }
-
-  // Method 3: Walk all text nodes
+  // Last try: walk text nodes
   const walker = document.createTreeWalker(
     document.body,
     NodeFilter.SHOW_TEXT,
-    {
-      acceptNode(node) {
-        const parent = node.parentElement;
-        if (!parent) return NodeFilter.FILTER_REJECT;
-        const tag = parent.tagName?.toLowerCase() || '';
-        if (['script', 'style'].includes(tag)) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      }
-    }
+    { acceptNode: (node) => {
+      const tag = node.parentElement?.tagName?.toLowerCase() || '';
+      if (['script', 'style'].includes(tag)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }}
   );
 
   const lines = [];
@@ -461,17 +476,20 @@ function selectAllAndCopyInPDFViewer() {
     if (text && text.length > 0) lines.push(text);
   }
 
-  selectedText = lines.join('\n');
-  if (selectedText.length > 50) {
+  const allText = lines.join('\n');
+  
+  // If we found text, try to copy it via textarea trick
+  if (allText.length > 50) {
     const ta = document.createElement('textarea');
-    ta.value = selectedText;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
+    ta.value = allText;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
     document.body.appendChild(ta);
     ta.select();
-    document.execCommand('copy');
+    try {
+      document.execCommand('copy');
+    } catch(e) {}
     document.body.removeChild(ta);
-    return { success: true, charCount: selectedText.length, method: 'treeWalker' };
+    return { success: true, charCount: allText.length, method: 'treeWalker' };
   }
 
   return { success: false, error: 'No readable text found' };
