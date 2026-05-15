@@ -379,39 +379,95 @@ function showNotification(title, message) {
   });
 }
 
-// ─── Fallback: Download PDF + Extract Text ───────────────────────────────────
+// ─── Fallback: Open PDF in tab + Inject OCR script ─────────────────────────────
 
 /**
- * Download the PDF to a Blob, then use PDF.js in offscreen doc to parse it.
- * This bypasses Chrome's PDF viewer sandbox entirely.
+ * Opens PDF in a visible tab and runs the OCR script directly in the tab.
+ * This is the same approach that works in the console!
  */
 async function handlePDFViaChromeViewer(url) {
+  let tabId = null;
+
+
   try {
-    showNotification("Fallback Mode", "Downloading PDF for processing...");
+    showNotification("Extracting Text...", "Please wait a few seconds.");
 
-    console.log("[PDF Copier] Downloading PDF via offscreen...");
 
-    // Use offscreen document to download and process
-    await ensureOffscreenDocument();
+    console.log("[PDF Copier] Opening PDF in visible tab for extraction...");
 
-    const response = await sendMessageToOffscreen({
-      action: "downloadAndParse",
+    // Open PDF in a visible tab
+    const newTab = await chrome.tabs.create({
       url: url,
+      active: true,
+    });
+    tabId = newTab.id;
+
+
+    // Wait for page to load
+    await waitForTabLoad(tabId);
+
+    // Wait for Chrome's PDF viewer to initialize (longer wait for visible tab)
+    await new Promise(r => setTimeout(r, 4000));
+
+
+    // Inject the script that works!
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: extractPDFTextViaConsole,
     });
 
-    if (response.success) {
-      await writeToClipboardViaOffscreen(response.text);
+    const extractedText = results?.[0]?.result;
+
+
+    if (extractedText && extractedText.trim().length > 50) {
+      await writeToClipboardViaOffscreen(extractedText);
       showNotification(
         "✅ Copied!",
-        `${response.text.length} characters extracted.`
+        `${extractedText.trim().length} characters extracted.`
       );
     } else {
-      throw new Error(response.error || "Failed to process PDF.");
+      throw new Error("No text extracted from PDF.");
     }
   } catch (err) {
-    console.error("[PDF Copier] Download fallback error:", err);
-    throw new Error("Could not extract text from this PDF. The PDF may use a non-standard encoding that Chrome's PDF viewer can render but our tools cannot decode.");
+    console.error("[PDF Copier] Tab extraction error:", err);
+    throw new Error("Could not extract text: " + err.message);
+  } finally {
+    if (tabId !== null) {
+      try {
+        await chrome.tabs.remove(tabId);
+      } catch (e) {}
+    }
   }
+}
+
+/**
+ * This function runs IN the PDF tab's console - same code that works!
+ */
+async function extractPDFTextViaConsole() {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Get PDF bytes
+      const buf = await fetch(window.location.href, { credentials: 'include' }).then(r => r.arrayBuffer());
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+
+
+      let fullText = '';
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: 2 });
+        const canvas = document.createElement('canvas');
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+        const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+        fullText += text + '\n';
+      }
+
+      resolve(fullText);
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 // ─── Message Listener (from content scripts, if needed) ───────────────────────
