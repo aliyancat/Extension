@@ -114,6 +114,7 @@ async function handleDownloadAndParse(url) {
 
   console.log("[Offscreen] Starting Tesseract worker...");
   const worker = await Tesseract.createWorker("eng", 1, {
+    workerPath: chrome.runtime.getURL("lib/tesseract.worker.min.js"),
     logger: (m) => {
       if (m.status === "recognizing text") {
         console.log("[Offscreen] OCR progress:", Math.round(m.progress * 100) + "%");
