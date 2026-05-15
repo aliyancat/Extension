@@ -290,18 +290,39 @@ async function ensureOffscreenDocument() {
  */
 function sendMessageToOffscreen(message) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("Offscreen document timed out (30s)."));
-    }, 30000);
+    let retries = 0;
+    const maxRetries = 2;
+    
+    function trySend() {
+      const timeout = setTimeout(() => {
+        if (retries < maxRetries) {
+          retries++;
+          console.log(`[PDF Copier] Offscreen send timeout, retry ${retries}/${maxRetries}...`);
+          trySend();
+        } else {
+          reject(new Error("Offscreen document timed out after retries."));
+        }
+      }, 25000);
 
-    chrome.runtime.sendMessage({ target: "offscreen", ...message }, (response) => {
-      clearTimeout(timeout);
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(response);
-      }
-    });
+      const msgId = ++offscreenMessageId;
+      
+      chrome.runtime.sendMessage({ target: "offscreen", msgId, ...message }, (response) => {
+        clearTimeout(timeout);
+        if (chrome.runtime.lastError) {
+          console.warn(`[PDF Copier] Offscreen error (attempt ${retries+1}):`, chrome.runtime.lastError.message);
+          if (retries < maxRetries) {
+            retries++;
+            setTimeout(trySend, 1000); // Wait 1s before retry
+          } else {
+            reject(new Error(chrome.runtime.lastError.message));
+          }
+        } else {
+          resolve(response);
+        }
+      });
+    }
+    
+    trySend();
   });
 }
 
