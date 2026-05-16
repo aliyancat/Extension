@@ -86,28 +86,54 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         target: { tabId: tabId },
         world: "MAIN",
         func: () => {
-          const script = document.createElement('script');
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js';
-          document.head.appendChild(script);
-          script.onload = async () => {
-            const buf = await fetch(window.location.href, { credentials: 'include' }).then(r => r.arrayBuffer());
-            const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-            let fullText = '';
-            for (let i = 1; i <= pdf.numPages; i++) {
-              const page = await pdf.getPage(i);
-              const viewport = page.getViewport({ scale: 2 });
-              const canvas = document.createElement('canvas');
-              canvas.width = viewport.width;
-              canvas.height = viewport.height;
-              await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-              const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
-              fullText += text + '\n';
-              console.log(`Page ${i} done`);
+          // Wait for pdfjsLib to be available (Chrome's PDF viewer loads it)
+          function waitForPdfjsLib(timeout = 10000) {
+            return new Promise((resolve, reject) => {
+              const start = Date.now();
+              const check = () => {
+                if (typeof pdfjsLib !== 'undefined') {
+                  resolve();
+                } else if (Date.now() - start > timeout) {
+                  reject(new Error('pdfjsLib timeout'));
+                } else {
+                  setTimeout(check, 100);
+                }
+              };
+              check();
+            });
+          }
+
+          (async () => {
+            try {
+              await waitForPdfjsLib();
+              console.log('pdfjsLib loaded');
+
+              const script = document.createElement('script');
+              script.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js';
+              document.head.appendChild(script);
+              script.onload = async () => {
+                const buf = await fetch(window.location.href, { credentials: 'include' }).then(r => r.arrayBuffer());
+                const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+                let fullText = '';
+                for (let i = 1; i <= pdf.numPages; i++) {
+                  const page = await pdf.getPage(i);
+                  const viewport = page.getViewport({ scale: 2 });
+                  const canvas = document.createElement('canvas');
+                  canvas.width = viewport.width;
+                  canvas.height = viewport.height;
+                  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+                  const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+                  fullText += text + '\n';
+                  console.log(`Page ${i} done`);
+                }
+                console.log(fullText);
+                await navigator.clipboard.writeText(fullText);
+                console.log('Copied to clipboard!');
+              };
+            } catch (err) {
+              console.error('Error:', err);
             }
-            console.log(fullText);
-            await navigator.clipboard.writeText(fullText);
-            console.log('Copied to clipboard!');
-          };
+          })();
         },
       });
 
