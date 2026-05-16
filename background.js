@@ -19,31 +19,14 @@
  *   visible text → copy → close tab.
  */
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const OFFSCREEN_URL = chrome.runtime.getURL("offscreen.html");
 const CONTEXT_MENU_ID = "copy-pdf-content";
-const CONTEXT_MENU_ID_OCR = "copy-pdf-ocr";
-
-// ─── Lifecycle: Install / Startup ─────────────────────────────────────────────
 
 chrome.runtime.onInstalled.addListener(() => {
-  // Create the right-click context menu item.
-  // It appears when the user right-clicks on a hyperlink (<a> tag).
   chrome.contextMenus.create({
     id: CONTEXT_MENU_ID,
     title: "📋 Copy PDF / Doc Content",
-    contexts: ["link"], // only show on links
-  });
-
-  // Create OCR context menu item
-  chrome.contextMenus.create({
-    id: CONTEXT_MENU_ID_OCR,
-    title: "🔍 Extract Text (OCR)",
     contexts: ["link"],
   });
-
-  console.log("[PDF Copier] Extension installed. Context menus created.");
 });
 
 // ─── Context Menu Click Handler ───────────────────────────────────────────────
