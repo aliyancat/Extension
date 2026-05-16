@@ -41,34 +41,12 @@ if (typeof pdfjsLib !== "undefined") {
  * All messages meant for this offscreen doc include: { target: "offscreen" }
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // Only handle messages targeted at this offscreen document
   if (message.target !== "offscreen") return;
 
-  console.log("[Offscreen] Received message:", message.action);
-
-  // Route to the appropriate handler
-  if (message.action === "parsePDF") {
-    handleParsePDF(message.url)
-      .then(sendResponse)
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-
-    return true; // Keep the message channel open for async response
-  }
-
   if (message.action === "copyToClipboard") {
-    handleCopyToClipboard(message.text)
-      .then(sendResponse)
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-
-
-    return true;
-  }
-
-  if (message.action === "downloadAndParse") {
-    handleDownloadAndParse(message.url)
-      .then(sendResponse)
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-
+    navigator.clipboard.writeText(message.text)
+      .then(() => sendResponse({ success: true }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
 });
@@ -255,57 +233,3 @@ async function handleParsePDF(url) {
   };
 }
 
-// ─── Clipboard Writing ────────────────────────────────────────────────────────
-
-/**
- * Writes text to the system clipboard.
- *
- * @param {string} text - The text to write to clipboard.
- */
-async function handleCopyToClipboard(text) {
-  // Try the modern Clipboard API first
-  try {
-    await navigator.clipboard.writeText(text);
-    console.log("[Offscreen] Clipboard API succeeded, length:", text.length);
-    return { success: true };
-  } catch (clipErr) {
-    console.warn("[Offscreen] Clipboard API failed:", clipErr.message);
-  }
-
-  // Fallback 1: Create a temporary input/textarea element
-  try {
-    const el = document.createElement('textarea');
-    el.value = text;
-    el.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-    document.body.appendChild(el);
-    el.focus();
-    el.select();
-    const success = document.execCommand('copy');
-    document.body.removeChild(el);
-    if (success) {
-      console.log("[Offscreen] execCommand copy succeeded!");
-      return { success: true };
-    }
-  } catch (e1) {
-    console.warn("[Offscreen] Fallback 1 failed:", e1.message);
-  }
-
-  // Fallback 2: Try with an input element
-  try {
-    const input = document.createElement('input');
-    input.value = text;
-    input.style.cssText = 'position:fixed;left:-9999px;top:-9999px;';
-    document.body.appendChild(input);
-    input.select();
-    const success = document.execCommand('copy');
-    document.body.removeChild(input);
-    if (success) {
-      console.log("[Offscreen] execCommand (input) copy succeeded!");
-      return { success: true };
-    }
-  } catch (e2) {
-    console.warn("[Offscreen] Fallback 2 failed:", e2.message);
-  }
-
-  throw new Error("All clipboard methods failed. Try copying manually with Ctrl+A → Ctrl+C.");
-}
