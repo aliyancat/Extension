@@ -29,134 +29,14 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
-// ─── Context Menu Click Handler ───────────────────────────────────────────────
-
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === CONTEXT_MENU_ID_OCR) {
-    // OCR approach: open link, inject script with MAIN world
-    const linkUrl = info.linkUrl;
-    if (!linkUrl) {
-      showNotification("Error", "Could not detect a URL on this link.");
-      return;
-    }
-
-    try {
-      showNotification("Extracting Text...", "Please wait a few seconds.");
-      console.log("[PDF Copier] Opening URL for OCR:", linkUrl);
-
-      const newTab = await chrome.tabs.create({
-        url: linkUrl,
-        active: true,
-      });
-      const tabId = newTab.id;
-
-      // Wait for tab to load
-      await new Promise((resolve) => {
-        function listener(updatedTabId, changeInfo) {
-          if (updatedTabId === tabId && changeInfo.status === "complete") {
-            chrome.tabs.onUpdated.removeListener(listener);
-            resolve();
-          }
-        }
-        chrome.tabs.onUpdated.addListener(listener);
-      });
-
-      // Wait extra 1500ms
-      await new Promise(r => setTimeout(r, 1500));
-
-      // Inject with world: "MAIN"
-      await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        world: "MAIN",
-        func: () => {
-          // Wait for pdfjsLib to be available (Chrome's PDF viewer loads it)
-          function waitForPdfjsLib(timeout = 10000) {
-            return new Promise((resolve, reject) => {
-              const start = Date.now();
-              const check = () => {
-                if (typeof pdfjsLib !== 'undefined') {
-                  resolve();
-                } else if (Date.now() - start > timeout) {
-                  reject(new Error('pdfjsLib timeout'));
-                } else {
-                  setTimeout(check, 100);
-                }
-              };
-              check();
-            });
-          }
-
-          (async () => {
-            try {
-              await waitForPdfjsLib();
-              console.log('pdfjsLib loaded');
-
-              const script = document.createElement('script');
-              script.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js';
-              document.head.appendChild(script);
-              script.onload = async () => {
-                const buf = await fetch(window.location.href, { credentials: 'include' }).then(r => r.arrayBuffer());
-                const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-                let fullText = '';
-                for (let i = 1; i <= pdf.numPages; i++) {
-                  const page = await pdf.getPage(i);
-                  const viewport = page.getViewport({ scale: 2 });
-                  const canvas = document.createElement('canvas');
-                  canvas.width = viewport.width;
-                  canvas.height = viewport.height;
-                  await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-                  const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
-                  fullText += text + '\n';
-                  console.log(`Page ${i} done`);
-                }
-                console.log(fullText);
-                await navigator.clipboard.writeText(fullText);
-                console.log('Copied to clipboard!');
-              };
-            } catch (err) {
-              console.error('Error:', err);
-            }
-          })();
-        },
-      });
-
-      showNotification("✅ Done!", "Text extraction complete. Tab will stay open.");
-    } catch (err) {
-      console.error("[PDF Copier] OCR error:", err);
-      showNotification("Error", err.message || "Something went wrong.");
-    }
-    return;
-  }
-
   if (info.menuItemId !== CONTEXT_MENU_ID) return;
-
   const linkUrl = info.linkUrl;
-
-  if (!linkUrl) {
-    showNotification("Error", "Could not detect a URL on this link.");
-    return;
-  }
-
-  console.log("[PDF Copier] Right-clicked link:", linkUrl);
-
-  // Validate: we can't process chrome:// or browser-internal URLs
-  if (linkUrl.startsWith("chrome://") || linkUrl.startsWith("chrome-extension://")) {
-    showNotification("Unsupported", "Cannot access browser-internal pages.");
-    return;
-  }
+  if (!linkUrl) return;
 
   try {
-    showNotification("Working…", "Fetching document content, please wait.");
-
-    const isPDF = await detectIfPDF(linkUrl);
-
-    if (isPDF) {
-      console.log("[PDF Copier] Detected as PDF. Using PDF.js via offscreen.");
-      await handlePDF(linkUrl);
-    } else {
-      console.log("[PDF Copier] Not a PDF. Extracting text from HTML page.");
-      await handleHTMLPage(linkUrl);
-    }
+    showNotification("Working…", "Extracting PDF content...");
+    await handlePDF(linkUrl);
   } catch (err) {
     console.error("[PDF Copier] Error:", err);
     showNotification("Error", err.message || "Something went wrong.");
