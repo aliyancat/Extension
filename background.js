@@ -61,18 +61,19 @@ async function handlePDF(url) {
         canvas.height = viewport.height;
         await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
         
-        // Process canvas: grayscale + threshold
+        // Process canvas: grayscale only
         const ctx = canvas.getContext('2d');
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imgData.data;
         for (let j = 0; j < data.length; j += 4) {
           const gray = data[j] * 0.299 + data[j + 1] * 0.587 + data[j + 2] * 0.114;
-          const thresh = gray > 128 ? 255 : 0;
-          data[j] = data[j + 1] = data[j + 2] = thresh;
+          data[j] = data[j + 1] = data[j + 2] = gray;
         }
         ctx.putImageData(imgData, 0, 0);
         
-        const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+        const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {}, { 
+          tessedit_pageseg_mode: 6,
+        });
         fullText += text + '\n';
       }
 
