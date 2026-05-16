@@ -110,36 +110,9 @@ async function detectIfPDF(url) {
  * completely invisible to the user.
  */
 async function handlePDF(url) {
-  await ensureOffscreenDocument();
-
-  // Send a message to the offscreen document to parse the PDF
-  const response = await sendMessageToOffscreen({
-    action: "parsePDF",
-    url: url,
-  });
-
-  if (response.success) {
-    // Check if PDF.js found any actual text
-    const hasText = response.text && 
-      !response.text.includes("[No selectable text on this page") &&
-      response.text.length > 50; // Crude check for real content
-
-    if (hasText) {
-      await writeToClipboardViaOffscreen(response.text);
-      showNotification(
-        "✅ Copied!",
-        `Extracted ${response.pageCount} page(s), ${response.text.length} characters copied.`
-      );
-    } else {
-      // PDF.js found no text — fallback to Chrome's built-in viewer
-      console.log("[PDF Copier] PDF.js found no text. Falling back to Chrome viewer...");
-      await handlePDFViaChromeViewer(url);
-    }
-  } else {
-    // PDF.js failed entirely — fallback to Chrome viewer
-    console.log("[PDF Copier] PDF.js failed. Falling back to Chrome viewer...");
-    await handlePDFViaChromeViewer(url);
-  }
+  // Always use the Chrome viewer approach with OCR so tab opens and you can see it
+  console.log("[PDF Copier] Opening PDF with OCR approach...");
+  await handlePDFViaChromeViewer(url);
 }
 
 // ─── Step 2B: Handle Non-PDF (HTML) Pages ────────────────────────────────────
