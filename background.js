@@ -69,9 +69,8 @@ async function handlePDF(url) {
     }
   });
 
-  await chrome.tabs.remove(tab.id);
   const charCount = results?.[0]?.result;
-  showNotification("✅ Copied!", `${charCount} characters copied to clipboard!`);
+  showNotification("✅ Copied!", `${charCount} characters copied to clipboard! Tab stays open.`);
 }
 
 
