@@ -423,7 +423,7 @@ async function handlePDFViaChromeViewer(url) {
       await writeToClipboardViaOffscreen(extractedText);
       showNotification(
         "✅ Copied!",
-        `${extractedText.trim().length} characters extracted.`
+        `${extractedText.trim().length} characters extracted. Tab will stay open.`
       );
     } else {
       throw new Error("No text extracted from PDF.");
@@ -431,13 +431,8 @@ async function handlePDFViaChromeViewer(url) {
   } catch (err) {
     console.error("[PDF Copier] Tab extraction error:", err);
     throw new Error("Could not extract text: " + err.message);
-  } finally {
-    if (tabId !== null) {
-      try {
-        await chrome.tabs.remove(tabId);
-      } catch (e) {}
-    }
   }
+  // Tab stays open so you can see what happened
 }
 
 /**
