@@ -1,31 +1,7 @@
 <!DOCTYPE html>
-<!--
-  offscreen.html — Invisible background document
-
-  This page is NEVER shown to the user. It exists purely to give our
-  extension access to DOM APIs (which service workers don't have).
-
-  Why we need it:
-    1. PDF.js requires a Worker and Blob URLs — not available in service workers.
-    2. navigator.clipboard.writeText() requires a "focused" document context.
-       An offscreen document satisfies this requirement in Chrome MV3.
-    3. Tesseract.js requires a DOM environment to run OCR on canvas elements.
-
-  How it works:
-    background.js creates this document silently, then sends it messages.
-    offscreen.js listens for those messages and responds.
--->
 <html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>PDF Copier Offscreen</title>
-  </head>
+  <head><meta charset="UTF-8" /></head>
   <body>
-    <!-- PDF.js library loaded from local copy (bundled with extension) -->
-    <script src="lib/pdf.min.js"></script>
-    <!-- Tesseract.js for OCR (loaded locally) -->
-    <script src="lib/tesseract.min.js"></script>
-    <!-- Our offscreen logic -->
     <script src="offscreen.js"></script>
   </body>
 </html>
