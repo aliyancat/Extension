@@ -64,18 +64,9 @@ async function handlePDF(url) {
         const ctx = canvas.getContext('2d');
         const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const data = imgData.data;
-        
-        // Page 1 (cover sheet): higher threshold 155
-        // Pages 2+: grayscale only, no threshold
-        const threshold = (i === 1) ? 155 : 256;
-        
         for (let j = 0; j < data.length; j += 4) {
           const gray = data[j] * 0.299 + data[j + 1] * 0.587 + data[j + 2] * 0.114;
-          if (threshold < 256) {
-            data[j] = data[j + 1] = data[j + 2] = gray > threshold ? 255 : 0;
-          } else {
-            data[j] = data[j + 1] = data[j + 2] = gray;
-          }
+          data[j] = data[j + 1] = data[j + 2] = gray;
         }
         ctx.putImageData(imgData, 0, 0);
         
