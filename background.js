@@ -23,7 +23,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 async function handlePDF(url) {
-  const tab = await chrome.tabs.create({ url: url, active: false });
+  const tab = await chrome.tabs.create({ url: url, active: true });
   await waitForTabLoad(tab.id);
 
   const results = await chrome.scripting.executeScript({
