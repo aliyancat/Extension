@@ -474,6 +474,10 @@ async function extractPDFTextViaConsole() {
         console.log(`Page ${i} done`);
       }
 
+      // Copy to clipboard
+      await navigator.clipboard.writeText(fullText);
+      console.log('Copied to clipboard!');
+
       resolve(fullText);
     } catch (err) {
       reject(err);
