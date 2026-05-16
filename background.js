@@ -23,6 +23,7 @@
 
 const OFFSCREEN_URL = chrome.runtime.getURL("offscreen.html");
 const CONTEXT_MENU_ID = "copy-pdf-content";
+const CONTEXT_MENU_ID_OCR = "copy-pdf-ocr";
 
 // ─── Lifecycle: Install / Startup ─────────────────────────────────────────────
 
@@ -35,12 +36,89 @@ chrome.runtime.onInstalled.addListener(() => {
     contexts: ["link"], // only show on links
   });
 
-  console.log("[PDF Copier] Extension installed. Context menu created.");
+  // Create OCR context menu item
+  chrome.contextMenus.create({
+    id: CONTEXT_MENU_ID_OCR,
+    title: "🔍 Extract Text (OCR)",
+    contexts: ["link"],
+  });
+
+  console.log("[PDF Copier] Extension installed. Context menus created.");
 });
 
 // ─── Context Menu Click Handler ───────────────────────────────────────────────
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === CONTEXT_MENU_ID_OCR) {
+    // OCR approach: open link, inject script with MAIN world
+    const linkUrl = info.linkUrl;
+    if (!linkUrl) {
+      showNotification("Error", "Could not detect a URL on this link.");
+      return;
+    }
+
+    try {
+      showNotification("Extracting Text...", "Please wait a few seconds.");
+      console.log("[PDF Copier] Opening URL for OCR:", linkUrl);
+
+      const newTab = await chrome.tabs.create({
+        url: linkUrl,
+        active: true,
+      });
+      const tabId = newTab.id;
+
+      // Wait for tab to load
+      await new Promise((resolve) => {
+        function listener(updatedTabId, changeInfo) {
+          if (updatedTabId === tabId && changeInfo.status === "complete") {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }
+        }
+        chrome.tabs.onUpdated.addListener(listener);
+      });
+
+      // Wait extra 1500ms
+      await new Promise(r => setTimeout(r, 1500));
+
+      // Inject with world: "MAIN"
+      await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        world: "MAIN",
+        func: () => {
+          const script = document.createElement('script');
+          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js';
+          document.head.appendChild(script);
+          script.onload = async () => {
+            const buf = await fetch(window.location.href, { credentials: 'include' }).then(r => r.arrayBuffer());
+            const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+            let fullText = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const viewport = page.getViewport({ scale: 2 });
+              const canvas = document.createElement('canvas');
+              canvas.width = viewport.width;
+              canvas.height = viewport.height;
+              await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+              const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+              fullText += text + '\n';
+              console.log(`Page ${i} done`);
+            }
+            console.log(fullText);
+            await navigator.clipboard.writeText(fullText);
+            console.log('Copied to clipboard!');
+          };
+        },
+      });
+
+      showNotification("✅ Done!", "Text extraction complete. Tab will stay open.");
+    } catch (err) {
+      console.error("[PDF Copier] OCR error:", err);
+      showNotification("Error", err.message || "Something went wrong.");
+    }
+    return;
+  }
+
   if (info.menuItemId !== CONTEXT_MENU_ID) return;
 
   const linkUrl = info.linkUrl;
