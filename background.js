@@ -414,9 +414,9 @@ async function handlePDFViaChromeViewer(url) {
 async function extractPDFTextViaConsole() {
   return new Promise(async (resolve, reject) => {
     try {
-      // Load Tesseract from CDN inside the tab (same as user's working code!)
+      // Load Tesseract from extension's local lib folder (avoids CSP issues)
       const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js';
+      script.src = chrome.runtime.getURL('lib/tesseract.min.js');
       document.head.appendChild(script);
 
       // Wait for Tesseract to load
