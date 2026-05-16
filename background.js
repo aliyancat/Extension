@@ -60,7 +60,16 @@ async function handlePDF(url) {
         canvas.width = viewport.width;
         canvas.height = viewport.height;
         await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-        const { data: { text } } = await Tesseract.recognize(canvas, 'eng');
+        const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+        logger: m => console.log(m.status),
+        rectangle: { top: 0, left: 0, width: canvas.width, height: canvas.height },
+      }, {
+        scale: true,
+        binary: false,
+        grayscale: true,
+        contrast: 1.5,
+        tessedit_pageseg_mode: '1',
+      });
         fullText += text + '\n';
       }
 
