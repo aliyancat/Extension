@@ -1,4 +1,4 @@
 {
-    "autoGitCopilot.enabled": false,
+    "autoGitCopilot.enabled": true,
     "vscode-autoGit.enabled": true
 }

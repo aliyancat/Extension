@@ -3,36 +3,23 @@
  *
  * Runs on every webpage the user visits.
  *
- * Current role: Minimal. Most work is done in background.js + offscreen.js.
- *
- * Future use cases for this script:
- *   - Hover detection to pre-fetch PDF metadata
- *   - Visual highlight of PDF links on page
- *   - Inline status indicator next to links
- *   - Keyboard shortcut support
- *
- * NOTE: Content scripts run in an isolated world — they can read the DOM
- * but cannot directly access the extension's background service worker data.
- * Communication happens via chrome.runtime.sendMessage().
+ * Roles:
+ *   - Adds 📋 badges to PDF links on pages
+ *   - Detects print-view pages and adds a floating "Scan" button
+ *   - Relays scan requests to the background service worker
  */
 
 console.log("[PDF Copier] Content script loaded on:", window.location.hostname);
 
 // ─── Optional: Visual Badge on PDF Links ─────────────────────────────────────
 
-/**
- * Adds a subtle "PDF" badge next to links that appear to point to PDFs.
- * This is optional — comment out initPDFBadges() if you don't want it.
- */
 function initPDFBadges() {
-  // Find all links ending in .pdf
   const links = document.querySelectorAll('a[href$=".pdf"], a[href*=".pdf?"]');
 
   links.forEach((link) => {
-    if (link.dataset.pdfCopierTagged) return; // don't double-tag
+    if (link.dataset.pdfCopierTagged) return;
     link.dataset.pdfCopierTagged = "true";
 
-    // Create a small badge element
     const badge = document.createElement("span");
     badge.textContent = " 📋";
     badge.title = "Right-click → Copy PDF Content";
@@ -48,16 +35,97 @@ function initPDFBadges() {
   });
 }
 
-// Run badge tagging after DOM is ready
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", initPDFBadges);
-} else {
-  initPDFBadges();
+// ─── Floating Scan Button for Print-View Pages ────────────────────────────────
+
+function isPrintViewPage() {
+  const url = window.location.href;
+  return /\/print\/?(\?|$)/i.test(url) ||
+         /[?&]print=1/i.test(url) ||
+         /\/printview/i.test(url);
 }
 
-// Also run if new links are added dynamically (e.g. infinite scroll, SPAs)
+function hasEmbeddedPDF() {
+  return !!document.querySelector(
+    'iframe[src*=".pdf"], embed[src*=".pdf"], object[data*=".pdf"]'
+  );
+}
+
+function initScanButton() {
+  // Only add the button on print-view pages or pages with embedded PDFs
+  if (!isPrintViewPage() && !hasEmbeddedPDF()) return;
+
+  // Don't add duplicate buttons
+  if (document.getElementById('pdf-copier-scan-btn')) return;
+
+  const btn = document.createElement('button');
+  btn.id = 'pdf-copier-scan-btn';
+  btn.textContent = '📋 Scan This Page';
+  btn.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 999999;
+    padding: 12px 24px;
+    background: #4CAF50;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: sans-serif;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    transition: background 0.2s, transform 0.1s;
+  `;
+  btn.onmouseover = () => { btn.style.background = '#45a049'; };
+  btn.onmouseout = () => { btn.style.background = '#4CAF50'; };
+  btn.onmousedown = () => { btn.style.transform = 'scale(0.95)'; };
+  btn.onmouseup = () => { btn.style.transform = 'scale(1)'; };
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    btn.textContent = '📋 Scanning...';
+    btn.style.background = '#888';
+
+    try {
+      const response = await chrome.runtime.sendMessage({ action: "scanCurrentPage" });
+      if (response && response.success) {
+        btn.textContent = '✅ Done!';
+        btn.style.background = '#4CAF50';
+      } else {
+        btn.textContent = '❌ Error';
+        btn.style.background = '#f44336';
+      }
+    } catch (err) {
+      btn.textContent = '❌ Error';
+      btn.style.background = '#f44336';
+    }
+
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = '📋 Scan This Page';
+      btn.style.background = '#4CAF50';
+    }, 5000);
+  };
+
+  document.body.appendChild(btn);
+}
+
+// ─── Initialization ───────────────────────────────────────────────────────────
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    initPDFBadges();
+    initScanButton();
+  });
+} else {
+  initPDFBadges();
+  initScanButton();
+}
+
+// Watch for dynamically added content (e.g. infinite scroll, SPAs)
 const observer = new MutationObserver(() => {
   initPDFBadges();
+  initScanButton();
 });
 
 observer.observe(document.body, {
